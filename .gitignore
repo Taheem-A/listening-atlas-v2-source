@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.preview/
+.env
+.env.*
+!.env.example
+server/assets.generated.js
