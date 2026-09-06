@@ -23,6 +23,21 @@ export class Enrichment {
       return data;
     }finally{clearTimeout(timer);}
   }
+  diagnosticState(r){
+    const parts=[];
+    if(r.upstream_stage)parts.push('Spotify '+String(r.upstream_stage).replace('_response',' response').replaceAll('_',' '));
+    if(Number.isInteger(r.upstream_status))parts.push('HTTP '+r.upstream_status);
+    if(r.upstream_reason==='timeout')parts.push('timed out');
+    else if(r.upstream_reason==='network_error')parts.push('network error');
+    else if(r.upstream_reason==='invalid_json'||r.upstream_reason==='invalid_payload')parts.push('invalid response');
+    else if(r.upstream_reason)parts.push(String(r.upstream_reason).replaceAll('_',' '));
+    if(r.upstream_error_name)parts.push(String(r.upstream_error_name));
+    if(r.upstream_error_code)parts.push(String(r.upstream_error_code));
+    const general=r.network_probes?.general_https,spotify=r.network_probes?.spotify_accounts;
+    if(general)parts.push('HTTPS probe '+(general.ok?'reachable'+(Number.isInteger(general.http_status)?' HTTP '+general.http_status:''):'failed'+(general.error_name?' '+general.error_name:'')+(general.error_code?' '+general.error_code:'')));
+    if(spotify)parts.push('Spotify host '+(spotify.ok?'reachable'+(Number.isInteger(spotify.http_status)?' HTTP '+spotify.http_status:''):'failed'+(spotify.error_name?' '+spotify.error_name:'')+(spotify.error_code?' '+spotify.error_code:'')));
+    return {state:r.state,retry_at:r.retry_at,error_stage:parts.join(' · ')||null,upstream_stage:null,upstream_status:null,upstream_reason:null};
+  }
   async run(rawIDs,{fetchMissing=false}={}){
     this.cancel();const generation=this.generation,ids=[...new Set(rawIDs.filter(id=>spotifyID(id)))];
     const config=await this.status();if(generation!==this.generation||config.state!=='ready')return;
@@ -41,12 +56,12 @@ export class Enrichment {
             if(!batch.length)continue;
             const r=await this.post('enrich',batch);if(generation!==this.generation)return;await this.apply(r.records||[]);publish({});
             if(['rate_limited','busy'].includes(r.state)){
-              publish({state:r.state,retry_at:r.retry_at,upstream_stage:r.upstream_stage,upstream_status:r.upstream_status,upstream_reason:r.upstream_reason});const wait=Math.max(1000,(r.retry_at||this.clock()+60000)-this.clock());
+              publish(this.diagnosticState(r));const wait=Math.max(1000,(r.retry_at||this.clock()+60000)-this.clock());
               // Long cooldowns require a deliberate resume; short ones resume automatically.
               if(wait>300000)return;
               this.timer=setTimeout(()=>{if(generation===this.generation)this.run(ids,{fetchMissing:true})},wait);return;
             }
-            if(r.state!=='ready'){publish({state:r.state,retry_at:r.retry_at,upstream_stage:r.upstream_stage,upstream_status:r.upstream_status,upstream_reason:r.upstream_reason});return;}
+            if(r.state!=='ready'){publish(this.diagnosticState(r));return;}
             // The server returns the global not-before time after a successful batch. Honor it
             // here so the next request does not bounce off the D1 cooldown and restart preflight.
             const pace=Math.max(0,(r.retry_at||0)-this.clock());
