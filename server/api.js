@@ -17,6 +17,8 @@ const failureDetails=failure=>({
   upstream_stage:failure.stage||null,
   upstream_status:Number.isInteger(failure.httpStatus)?failure.httpStatus:null,
   upstream_reason:failure.reason||null,
+  upstream_error_name:failure.errorName||null,
+  upstream_error_code:failure.errorCode||null,
 });
 // One globally leased batch at a time. Keep hosted invocations short: at most three
 // Spotify calls per request, paced one second apart. The browser honors retry_at before
@@ -34,6 +36,9 @@ export async function enrich(ids,cache,client,{clock=Date.now,sleep=ms=>new Prom
       try{fetched=await client.track(id)}catch(error){
         const failure=error instanceof SpotifyFailure?error:new SpotifyFailure('temporary_error',0,{stage:'spotify_client',reason:'unexpected_error'});
         state=failure.status;diagnostic=failureDetails(failure);
+        if(failure.reason==='network_error'&&typeof client.diagnostics==='function'){
+          try{diagnostic.network_probes=await client.diagnostics();}catch{diagnostic.network_probes={probe_error:true};}
+        }
         if(['rate_limited','credentials_error','access_denied'].includes(state)){next=failure.retryAt||clock()+60000;break;}
         const attempts=(old?.attempts||0)+1;
         const row={spotify_track_id:id,duration_ms:null,metadata_status:'temporary_error',fetched_at:clock(),expires_at:clock()+CACHE_TTL,retry_at:clock()+Math.min(300000,15000*2**(attempts-1)),attempts};
