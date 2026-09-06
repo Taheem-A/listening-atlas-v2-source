@@ -4,17 +4,30 @@ export function retryAfter(value, now=Date.now()) {
   if (Number.isFinite(seconds) && seconds >= 0) return now + Math.max(1000,seconds*1000);
   const date=Date.parse(value); return Number.isFinite(date)&&date>now?date:now+60000;
 }
+const safeName=value=>typeof value==='string'&&/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(value)?value:null;
+const safeCode=value=>typeof value==='string'&&/^[A-Za-z0-9_.-]{1,64}$/.test(value)?value:null;
+function safeNetworkError(error,controller) {
+  return {
+    reason:controller.signal.aborted?'timeout':'network_error',
+    errorName:safeName(error?.name),
+    errorCode:safeCode(error?.code)||safeCode(error?.cause?.code),
+  };
+}
 export class SpotifyFailure extends Error {
-  constructor(status,retryAt=0,{stage=null,httpStatus=null,reason=null}={}){
-    super(status);this.status=status;this.retryAt=retryAt;this.stage=stage;this.httpStatus=httpStatus;this.reason=reason;
+  constructor(status,retryAt=0,{stage=null,httpStatus=null,reason=null,errorName=null,errorCode=null}={}){
+    super(status);this.status=status;this.retryAt=retryAt;this.stage=stage;this.httpStatus=httpStatus;this.reason=reason;this.errorName=errorName;this.errorCode=errorCode;
   }
 }
 export class SpotifyClient {
   constructor(env, {fetcher=(...args)=>fetch(...args),clock=Date.now}={}) {this.env=env;this.fetcher=fetcher;this.clock=clock;this.token=null;this.tokenUntil=0;this.pending=null;}
   async fetchTimed(url,options={},stage='upstream') {
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
-    try {return await this.fetcher(url,{...options,signal:controller.signal,redirect:'error'});}
-    catch {throw new SpotifyFailure('temporary_error',0,{stage,reason:controller.signal.aborted?'timeout':'network_error'});}
+    try {
+      // Use the runtime's normal redirect behavior. Spotify's token/track endpoints do not
+      // require redirect rejection, and hosted fetch implementations can differ here.
+      return await this.fetcher(url,{...options,signal:controller.signal});
+    }
+    catch(error){throw new SpotifyFailure('temporary_error',0,{stage,...safeNetworkError(error,controller)});}
     finally {clearTimeout(timer);}
   }
   async accessToken(force=false) {
@@ -47,5 +60,21 @@ export class SpotifyClient {
       if(body.type!=='track'||body.is_local===true||!Number.isSafeInteger(body.duration_ms)||body.duration_ms<=0||body.duration_ms>86400000) return {status:'invalid_metadata',duration:null};
       return {status:'ready',duration:body.duration_ms};
     }
+  }
+  async diagnostics() {
+    const probe=async(url,stage)=>{
+      try{
+        const response=await this.fetchTimed(url,{method:'GET'},stage);
+        return {ok:true,http_status:response.status};
+      }catch(error){
+        const failure=error instanceof SpotifyFailure?error:new SpotifyFailure('temporary_error',0,{stage,reason:'unexpected_error'});
+        return {ok:false,http_status:Number.isInteger(failure.httpStatus)?failure.httpStatus:null,reason:failure.reason||null,error_name:failure.errorName||null,error_code:failure.errorCode||null};
+      }
+    };
+    const [general,spotifyAccounts]=await Promise.all([
+      probe('https://example.com/','probe_general_https'),
+      probe('https://accounts.spotify.com/','probe_spotify_accounts'),
+    ]);
+    return {general_https:general,spotify_accounts:spotifyAccounts};
   }
 }
