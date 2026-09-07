@@ -39,3 +39,30 @@ test('lookup HTTP failures preserve sanitized status and stage',async()=>{
  const states=[];const manager=new Enrichment({getMetadata:()=>({}),apply:async()=>{},onState:s=>states.push(s),fetcher:async url=>url.endsWith('status')?Response.json({state:'ready'}):new Response('upstream limit',{status:429})});
  await manager.run([ID]);assert.equal(states.at(-1).state,'http_error');assert.equal(states.at(-1).http_status,429);assert.equal(states.at(-1).error_stage,'lookup');
 });
+test('progressive enrichment uses short three-track server batches',async()=>{
+ const ids=Array.from({length:7},(_,i)=>i.toString(36).padStart(22,'0')),metadata={},sizes=[];
+ const manager=new Enrichment({getMetadata:()=>metadata,apply:async rows=>{for(const r of rows)metadata[r.spotify_track_id]={...r,source:'spotify'}},onState:()=>{},fetcher:async(url,options)=>{
+  if(url.endsWith('status'))return Response.json({state:'ready',cache:{}});
+  const sent=JSON.parse(options.body).ids;
+  if(url.endsWith('lookup'))return Response.json({state:'ready',records:[]});
+  sizes.push(sent.length);return Response.json({state:'ready',retry_at:0,records:sent.map(id=>({spotify_track_id:id,duration_ms:200000,metadata_status:'ready',expires_at:Date.now()+999999,attempts:0,retry_at:0}))});
+ }});
+ await manager.run(ids,{fetchMissing:true});assert.deepEqual(sizes,[3,3,1]);assert.equal(manager.state.state,'complete');
+});
+test('Spotify upstream diagnostics are propagated without raw response content',async()=>{
+ const states=[];const manager=new Enrichment({getMetadata:()=>({}),apply:async()=>{},onState:s=>states.push(s),fetcher:async(url,options)=>{
+  if(url.endsWith('status'))return Response.json({state:'ready',cache:{}});
+  if(url.endsWith('lookup'))return Response.json({state:'ready',records:[]});
+  return Response.json({state:'temporary_error',retry_at:Date.now()+15000,records:[],upstream_stage:'token',upstream_status:503,upstream_reason:'network_error'});
+ }});
+ await manager.run([ID],{fetchMissing:true});const final=states.at(-1);assert.equal(final.state,'temporary_error');assert.equal(final.upstream_stage,'token');assert.equal(final.upstream_status,503);assert.equal(final.upstream_reason,'network_error');
+});
+test('successful batches honor server retry_at before the next enrich request',async()=>{
+ const ids=Array.from({length:4},(_,i)=>(i+20).toString(36).padStart(22,'0')),metadata={},times=[];
+ const manager=new Enrichment({getMetadata:()=>metadata,apply:async rows=>{for(const r of rows)metadata[r.spotify_track_id]={...r,source:'spotify'}},onState:()=>{},fetcher:async(url,options)=>{
+  if(url.endsWith('status'))return Response.json({state:'ready',cache:{}});
+  const sent=JSON.parse(options.body).ids;if(url.endsWith('lookup'))return Response.json({state:'ready',records:[]});
+  times.push(Date.now());return Response.json({state:'ready',retry_at:times.length===1?Date.now()+20:0,records:sent.map(id=>({spotify_track_id:id,duration_ms:200000,metadata_status:'ready',expires_at:Date.now()+999999,attempts:0,retry_at:0}))});
+ }});
+ await manager.run(ids,{fetchMissing:true});assert.equal(times.length,2);assert.ok(times[1]-times[0]>=15);assert.equal(manager.state.state,'complete');
+});

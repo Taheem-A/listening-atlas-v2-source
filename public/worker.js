@@ -1,13 +1,14 @@
 import {normalize,trackKey,aggregate,parseFile,spotifyID,periodRange,resetCalendarCache,metadataRecord} from './engine.js';
 import {buildProfile} from './profile.js';
 import {Enrichment} from './enrichment.js';
+import {prioritizedSpotifyIDs} from './priority.js';
 let events=[],durations={},demo=true,revision=0,importing=false;
 const resultsCache=new Map();
 function invalidate(){revision++;resultsCache.clear();}
 const db=()=>new Promise((resolve,reject)=>{const r=indexedDB.open('listening-atlas',1);r.onupgradeneeded=()=>r.result.createObjectStore('data');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
 async function saved(mode,value,key='history'){const d=await db();return new Promise((resolve,reject)=>{const tx=d.transaction('data',mode==='get'?'readonly':'readwrite'),s=tx.objectStore('data');let r;if(mode==='get')r=s.get(key);else if(mode==='clear')r=s.delete(key);else r=s.put(value,key);tx.oncomplete=()=>{d.close();resolve(r.result)};tx.onerror=()=>{d.close();reject(tx.error)};});}
 function normalizeMetadata(input){const output={};for(const [key,value] of Object.entries(input||{})){const id=spotifyID(key);if(!id)continue;const record=metadataRecord(value,key);if(record)output[id]=record;}return output;}
-const ids=()=>[...new Set(events.map(e=>spotifyID(e.uri)).filter(Boolean))];
+const ids=()=>prioritizedSpotifyIDs(events);
 const send=message=>self.postMessage(message);
 const enrichment=new Enrichment({getMetadata:()=>durations,apply:async records=>{
   let changed=false;for(const row of records){if(!spotifyID(row.spotify_track_id))continue;const record={...row,source:'spotify'};

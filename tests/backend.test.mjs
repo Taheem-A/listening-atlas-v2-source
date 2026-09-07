@@ -58,3 +58,23 @@ test('large lookup requests are accepted and cache queries remain capped at 80 I
  let r=await handleAPI(request('lookup',{ids}),{...env,DB:{}},{cache});assert.equal(r.status,200);assert.equal(received,1000);
  r=await handleAPI(request('lookup',{ids:[...ids,'zzzzzzzzzzzzzzzzzzzzzz']}),{...env,DB:{}},{cache});assert.equal(r.status,400);
 });
+test('Spotify failures preserve sanitized upstream stage/status without response bodies or secrets',async()=>{
+ const token500=new SpotifyClient(env,{fetcher:async()=>new Response('do not expose me',{status:500})});
+ await assert.rejects(()=>token500.track(ID),e=>e instanceof SpotifyFailure&&e.status==='temporary_error'&&e.stage==='token'&&e.httpStatus===500);
+ const track500=new SpotifyClient(env,{fetcher:async url=>url.includes('/api/token')?token():new Response('private upstream body',{status:502})});
+ await assert.rejects(()=>track500.track(ID),e=>e instanceof SpotifyFailure&&e.status==='temporary_error'&&e.stage==='track'&&e.httpStatus===502);
+ const network=new SpotifyClient(env,{fetcher:async()=>{throw Error('TEST_SECRET should never escape')}});
+ await assert.rejects(()=>network.track(ID),e=>e instanceof SpotifyFailure&&e.status==='temporary_error'&&e.stage==='token'&&e.reason==='network_error'&&!e.message.includes('TEST_SECRET'));
+});
+test('enrichment returns safe Spotify failure diagnostics and keeps transient backoff',async()=>{
+ const db=testDB(),cache=new MetadataCache(db),failure=new SpotifyFailure('temporary_error',0,{stage:'token',httpStatus:503,reason:'network_error'});
+ const r=await enrich([ID],cache,{track:async()=>{throw failure}},{clock:()=>1000,sleep:async()=>{}});
+ assert.equal(r.state,'temporary_error');assert.equal(r.upstream_stage,'token');assert.equal(r.upstream_status,503);assert.equal(r.upstream_reason,'network_error');assert.equal(r.records[0].attempts,1);assert.ok(r.retry_at>1000);db.close();
+});
+test('hosted enrich requests stay short by accepting at most three track IDs',async()=>{
+ const three=[ID,OTHER,'22dFghVXANMlKmJXsNCbNl'];
+ let received=0;const cache={prune:async()=>{},claim:async()=>true,control:async()=>null,get:async()=>[],put:async()=>{},release:async()=>{}};
+ const client={track:async()=>{received++;return{status:'ready',duration:123000}}};
+ let r=await handleAPI(request('enrich',{ids:three}),{...env,DB:{}},{cache,client,clock:()=>0,sleep:async()=>{}});assert.equal(r.status,200);assert.equal(received,3);
+ r=await handleAPI(request('enrich',{ids:[...three,'33dFghVXANMlKmJXsNCbNl']}),{...env,DB:{}},{cache,client,clock:()=>0,sleep:async()=>{}});assert.equal(r.status,400);
+});
