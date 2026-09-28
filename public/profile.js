@@ -56,15 +56,16 @@ function durationInfo(x,metadata,now){
   return {known:true,duration_ms:r.duration_ms,source:r.source||'legacy_unknown',metadata_status:r.metadata_status||null,fetched_at_utc:Number.isFinite(r.fetched_at)?iso(r.fetched_at):null,expires_at_utc:Number.isFinite(r.expires_at)?iso(r.expires_at):null};
 }
 function fullEntities(all,current,previous,metadata,now){
-  const cm=entityMaps(current),pm=previous?entityMaps(previous):{tracks:new Map(),artists:new Map(),albums:new Map()};
-  const tracks=[...all.tracks].sort(rankTracks).map((x,index)=>({
-    track_uri:x.uri||null,spotify_track_id:spotifyID(x.uri),track:x.name,artist:x.artist,album:x.album,
-    all_time_rank_by_30s_plays:index+1,duration:durationInfo(x,metadata,now),
-    metrics:{selected_period:metrics(cm.tracks.get(x.key)),previous_period:metrics(pm.tracks.get(x.key)),all_time:metrics(x)}
-  }));
+  const cm=entityMaps(current),pm=previous?entityMaps(previous):{tracks:new Map(),artists:new Map(),albums:new Map()},trackRefByKey=new Map();
+  const tracks=[...all.tracks].sort(rankTracks).map((x,index)=>{
+    const trackRef=index+1;trackRefByKey.set(x.key,trackRef);
+    return {track_ref:trackRef,track_uri:x.uri||null,spotify_track_id:spotifyID(x.uri),track:x.name,artist:x.artist,album:x.album,
+      all_time_rank_by_30s_plays:trackRef,duration:durationInfo(x,metadata,now),
+      metrics:{selected_period:metrics(cm.tracks.get(x.key)),previous_period:metrics(pm.tracks.get(x.key)),all_time:metrics(x)}};
+  });
   const artists=all.artists.map((x,index)=>({artist:x.name,all_time_rank_by_listening_time:index+1,metrics:{selected_period:metrics(cm.artists.get(x.key)),previous_period:metrics(pm.artists.get(x.key)),all_time:metrics(x)}}));
   const albums=all.albums.map((x,index)=>({album:x.name,artist:x.artist,all_time_rank_by_listening_time:index+1,metrics:{selected_period:metrics(cm.albums.get(x.key)),previous_period:metrics(pm.albums.get(x.key)),all_time:metrics(x)}}));
-  return {tracks,artists,albums};
+  return {entities:{tracks,artists,albums},trackRefByKey};
 }
 function momentum(current,previous,kind){
   if(!previous)return null;
@@ -85,19 +86,13 @@ function makeLocalizer(timezone){
   const weekdayFmt=new Intl.DateTimeFormat('en-US',{timeZone:timezone,weekday:'long'});
   return t=>{const d=new Date(t);return {date:dateFmt.format(d),hour:Number(hourFmt.format(d)),weekday:weekdayFmt.format(d)};};
 }
-function eventRecord(e,metadata,localize,now){
+export const eventColumns=['ended_at_utc','local_date','local_hour','local_weekday','track_ref','ms_played','skipped','platform','reason_start','reason_end','country','shuffle','offline','incognito','offline_timestamp','duration_ms','duration_source','completion_ratio_raw','completion_ratio_capped','full_listen','near_complete','early_exit','exceeded_track_duration'];
+function eventRow(e,metadata,localize,now,trackRef){
   const r=metadataFor(e,metadata,now,false),local=localize(e.t),raw=r?e.ms/r.duration_ms:null,capped=raw===null?null:Math.min(raw,1);
-  return {
-    ended_at_utc:iso(e.t),local_date:local.date,local_hour:local.hour,local_weekday:local.weekday,
-    ms_played:e.ms,track_uri:e.uri||null,spotify_track_id:spotifyID(e.uri),track:e.name,artist:e.artist,album:e.album,
-    skipped:e.skip,platform:e.platform||null,reason_start:e.start||null,reason_end:e.end||null,country:e.country||null,
-    shuffle:typeof e.shuffle==='boolean'?e.shuffle:null,offline:typeof e.offline==='boolean'?e.offline:null,
-    incognito:typeof e.incognito==='boolean'?e.incognito:null,offline_timestamp:e.offlineTimestamp??null,
-    duration_ms:r?.duration_ms??null,duration_source:r?.source||null,
-    completion_ratio_raw:raw===null?null:round(raw,6),completion_ratio_capped:capped===null?null:round(capped,6),
-    full_listen:capped===null?null:capped>=.90,near_complete:capped===null?null:capped>=.75,early_exit:capped===null?null:capped<.25,
-    exceeded_track_duration:raw===null?null:raw>1
-  };
+  return [iso(e.t),local.date,local.hour,local.weekday,trackRef??null,e.ms,e.skip,e.platform||null,e.start||null,e.end||null,e.country||null,
+    typeof e.shuffle==='boolean'?e.shuffle:null,typeof e.offline==='boolean'?e.offline:null,typeof e.incognito==='boolean'?e.incognito:null,e.offlineTimestamp??null,
+    r?.duration_ms??null,r?.source||null,raw===null?null:round(raw,6),capped===null?null:round(capped,6),
+    capped===null?null:capped>=.90,capped===null?null:capped>=.75,capped===null?null:capped<.25,raw===null?null:raw>1];
 }
 function groupedSummary(groups,timezone,metadata,now){
   return [...groups.entries()].sort(([a],[b])=>String(a).localeCompare(String(b))).map(([key,rows])=>{
@@ -135,8 +130,8 @@ export function buildProfile(events,metadata,q,demo=false,now=Date.now()){
   const compute=(from,to)=>aggregate(events,from,to,0,q.timezone,metadata,options);
   for(const days of [7,30,90,180]){const from=r.latest-days*86400000+1;windows['last_'+days+'_days']=periodSummary(compute(from,r.latest),from,r.latest);}
   const allRange=periodRange(events,{range:'all'}),all=compute(allRange.from,allRange.to),current=compute(r.from,r.to),previous=q.range==='all'?null:compute(r.previousFrom,r.previousTo);
-  const localize=makeLocalizer(q.timezone);
-  const historyEvents=[...events].sort((a,b)=>a.t-b.t).map(e=>eventRecord(e,metadata,localize,now));
+  const localize=makeLocalizer(q.timezone),entityData=fullEntities(all,current,previous,metadata,now);
+  const historyEvents=[...events].sort((a,b)=>a.t-b.t).map(e=>eventRow(e,metadata,localize,now,entityData.trackRefByKey.get(trackKey(e))));
   const sources=sourceCounts(events,metadata,now);
   return {
     schema_version:3,export_type:'listening_atlas_analysis',generated_at_utc:new Date(now).toISOString(),demo,
@@ -144,10 +139,10 @@ export function buildProfile(events,metadata,q,demo=false,now=Date.now()){
     definitions,
     data_quality:{...all.coverage,skip_flag_known_events:all.known,skip_flag_coverage:all.events?round(all.known/all.events):null,...sources},
     periods:{selected:periodSummary(current,r.from,r.to),previous:previous?periodSummary(previous,r.previousFrom,r.previousTo):null,...windows,all_time:periodSummary(all,allRange.from,allRange.to)},
-    entities:fullEntities(all,current,previous,metadata,now),
+    entities:entityData.entities,
     momentum:previous?{tracks:momentum(current.tracks,previous.tracks,'tracks'),artists:momentum(current.artists,previous.artists,'artists')}:null,
     time_series:timeSeries(events,q.timezone,metadata,now,localize),
-    events:historyEvents,
+    events:{order:'chronological_ascending',columns:eventColumns,rows:historyEvents},
     unavailable:['liked_status','playlist_membership','playlist_name_or_uri','exact_start_time','audio_features','lyrics','artwork'],
     omitted_for_privacy_or_irrelevance:['ip_address','decrypted_user_agent','credentials','raw_spotify_api_responses']
   };
