@@ -37,14 +37,15 @@ test('C,D: all date windows, custom UTC boundaries, non-overlap, timezone',()=>{
  const custom=periodRange(events,{range:'custom',from:now-100,to:now});assert.equal(aggregate(events,custom.from,custom.to).events,1);
  assert.equal(aggregate([event(1,now)],0,Infinity,0,'America/Toronto').days[0][0],'2026-08-30');assert.equal(aggregate([event(1,now)],0,Infinity,0,'UTC').days[0][0],'2026-08-31');
 });
-test('Q,R,S,T,U: deterministic compact schema v2, all counts, source-aware completion',()=>{
+test('Q,R,S,T,U: deterministic analysis schema v3, all counts, source-aware completion and event facts',()=>{
  const events=[event(200000),event(30000),event(10000),event(50000,Date.UTC(2026,7,31),'spotify:track:'+OTHER)],m={...meta,[OTHER]:{duration_ms:100000,source:'spotify',expires_at:Date.now()+86400000}};
- const p=buildProfile(events,m,q,false,1);assert.equal(p.schema_version,2);assert.deepEqual(p.selected_period.plays,{all_events:4,gte_30_seconds:3,gte_60_seconds:1});assert.equal(p.selected_period.completion.known_events,3);assert.equal(p.selected_period.completion.coverage,.75);assert.equal(p.windows.last_180_days.plays.all_events,4);assert.equal(p.windows.all_time.plays.all_events,4);
- const text=JSON.stringify(p);assert.deepEqual(JSON.parse(text),p);assert.equal(text.includes('duration_ms":'),false);assert.equal(text.includes('SPOTIFY_CLIENT_SECRET'),false);assert.equal(text.includes('platform'),false);assert.deepEqual(buildProfile(events,m,q,false,1),p);
- const another=buildProfile(events,m,{...q,threshold:60000},false,1);assert.deepEqual(another.selected_period,p.selected_period);assert.deepEqual(another.windows,p.windows);
+ const p=buildProfile(events,m,q,false,1);assert.equal(p.schema_version,3);assert.equal(p.export_type,'listening_atlas_analysis');assert.deepEqual(p.periods.selected.plays,{all_events:4,gte_30_seconds:3,gte_60_seconds:1});assert.equal(p.periods.selected.completion.known_events,4);assert.equal(p.periods.selected.completion.coverage,1);assert.equal(p.periods.last_180_days.plays.all_events,4);assert.equal(p.periods.all_time.plays.all_events,4);
+ assert.equal(p.events.length,4);assert.equal(p.events.find(x=>x.spotify_track_id===OTHER).duration_source,'spotify');assert.equal(p.events.find(x=>x.spotify_track_id===OTHER).completion_ratio_capped,.5);assert.equal(p.entities.tracks.length,2);assert.ok(p.time_series.daily.length);assert.ok(p.time_series.hour_of_day.length);
+ const text=JSON.stringify(p);assert.deepEqual(JSON.parse(text),p);assert.equal(text.includes('duration_ms'),true);assert.equal(text.includes('SPOTIFY_CLIENT_SECRET'),false);assert.equal(text.includes('raw_spotify_api_responses'),true);assert.deepEqual(buildProfile(events,m,q,false,1),p);
+ const another=buildProfile(events,m,{...q,threshold:60000},false,1);assert.deepEqual(another.periods.selected,p.periods.selected);assert.deepEqual(another.periods.last_180_days,p.periods.last_180_days);
 });
-test('Spotify and legacy-unknown metadata never feed AI completion; expired cache excluded locally',()=>{
- for(const source of ['spotify','legacy_unknown']){const m={[ID]:{duration_ms:100000,source,expires_at:Date.now()+10000}};assert.equal(buildProfile([event(50000)],m,q).selected_period.completion.mean,null);}
+test('Spotify and legacy-unknown metadata feed authorized analysis export; expired Spotify cache is excluded',()=>{
+ for(const source of ['spotify','legacy_unknown']){const m={[ID]:{duration_ms:100000,source,expires_at:Date.now()+10000}};assert.equal(buildProfile([event(50000)],m,q).periods.selected.completion.mean,.5);}
  assert.equal(aggregate([event(50000)],0,Infinity,0,'UTC',{[ID]:{duration_ms:100000,source:'spotify',expires_at:1}}).completion.mean,null);
 });
 test('export includes cooling-to-zero tracks and artist momentum',()=>{
