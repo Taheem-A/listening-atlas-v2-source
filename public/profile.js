@@ -119,8 +119,8 @@ function timeSeries(events,timezone,metadata,now,localize){
   return {daily:groupedSummary(daily,timezone,metadata,now).map(x=>({date:x.key,...Object.fromEntries(Object.entries(x).filter(([k])=>k!=='key'))})),hour_of_day:hours,weekday:weekdays};
 }
 function sourceCounts(events,metadata,now){
-  const tracks={},eventSources={},eventWithId=0,context={platform:0,reason_start:0,reason_end:0,country:0,shuffle:0,offline:0,incognito:0,offline_timestamp:0};
-  const seen=new Set();
+  const tracks={},eventSources={},context={platform:0,reason_start:0,reason_end:0,country:0,shuffle:0,offline:0,incognito:0,offline_timestamp:0};
+  let eventWithId=0;const seen=new Set();
   for(const e of events){
     if(spotifyID(e.uri))eventWithId++;
     if(e.platform&&e.platform!=='Unknown')context.platform++;if(e.start)context.reason_start++;if(e.end)context.reason_end++;if(e.country)context.country++;
