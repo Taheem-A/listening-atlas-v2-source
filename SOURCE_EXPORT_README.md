@@ -1,6 +1,6 @@
-# Listening Atlas V2 source export
+# Listening Atlas source export
 
-This archive contains the editable source for the current deployed Listening Atlas application, including the Spotify cache-preflight batching fix. It contains no hosted environment-variable values, access tokens, credentials, `node_modules`, build output, or runtime data.
+This archive contains the editable source for Listening Atlas. The analysis-export-v3 branch upgrades the ChatGPT-facing export from a compact profile to an analysis-grade JSON package. It contains no hosted environment-variable values, access tokens, credentials, `node_modules`, build output, or runtime data.
 
 ## Directory structure
 
@@ -74,3 +74,18 @@ The hosted runtime uses:
 - `SPOTIFY_ANALYTICS_PERMISSION` — set to `granted` only when enrichment is authorized for this application.
 
 Copy `.env.example` only as a reference. Keep real values outside source control and configure production values in the Site's Environment variables settings. Without these variables, Listening Atlas still imports and analyzes history; Spotify duration enrichment remains unavailable.
+
+
+## Analysis export schema v3
+
+The analysis export is designed to be self-contained for downstream analysis. It includes:
+
+- selected, previous, 7/30/90/180-day, and all-time aggregate summaries;
+- full all-time track, artist, and album catalogs with selected/previous/all-time metrics;
+- duration values and provenance for known tracks;
+- full current-vs-previous momentum lists;
+- daily, hour-of-day, and weekday summaries;
+- normalized event-level music history with playback-end timestamp, played milliseconds, identity, skip flag, platform, start/end reason, country, shuffle/offline/incognito context, duration source, and raw/capped completion;
+- explicit data-quality and field-coverage information.
+
+It intentionally excludes credentials, IP addresses, decrypted user-agent strings, raw Spotify API response objects, audio, artwork, and lyrics.

@@ -7,7 +7,7 @@ async function call(w,message,type){const p=wait(w,type);w.postMessage(message);
 const query={range:'all',threshold:0,timezone:'UTC'};
 test('B,V: old IndexedDB history and duration migration, safe demo switching, no destructive migration',async()=>{
  const w=new Worker(new URL('./worker-harness.mjs',import.meta.url),{workerData:{seed:old}});try{await wait(w,'harness_ready');await call(w,{type:'init'},'ready');let r=await call(w,{type:'query',query,view:'tracks',search:'',sort:'plays',page:0,id:1},'result');assert.equal(r.data.demo,false);assert.equal(r.data.rows[0].name,'Existing song');assert.equal(r.data.rows[0].completion.mean,.6);
- const p=await call(w,{type:'export',query},'export');assert.equal(p.profile.schema_version,2);assert.equal(p.profile.selected_period.completion.mean,null); // old provenance unknown
+ const p=await call(w,{type:'export',query},'export');assert.equal(p.profile.schema_version,3);assert.equal(p.profile.periods.selected.completion.mean,.6);const sourceCol=p.profile.events.columns.indexOf('duration_source');assert.equal(p.profile.events.rows[0][sourceCol],'legacy_unknown');
  await call(w,{type:'demo'},'ready');r=await call(w,{type:'query',query,view:'overview',search:'',sort:'plays',page:0,id:2},'result');assert.equal(r.data.demo,true);assert.ok(r.data.current.completion.known_events>0);
  const stored=await call(w,{type:'read_saved'},'saved');assert.deepEqual(stored.data,old);
  await call(w,{type:'init'},'ready');r=await call(w,{type:'query',query,view:'tracks',search:'',sort:'plays',page:0,id:3},'result');assert.equal(r.data.rows[0].name,'Existing song');
@@ -19,7 +19,7 @@ test('A,B: import replacement keeps duration cache, removes exact duplicate even
  const raw={ts:'2026-08-31T00:00:00Z',ms_played:100000,spotify_track_uri:'spotify:track:'+ID,master_metadata_track_name:'New song',master_metadata_album_artist_name:'Artist',master_metadata_album_album_name:'Album',skipped:false};
  await call(w,{type:'import',files:[new Blob([JSON.stringify([raw,raw])])]},'ready');let r=await call(w,{type:'query',query,view:'tracks',search:'',sort:'plays',page:0,id:1},'result');assert.equal(r.data.total,1);assert.equal(r.data.rows[0].completion.mean,.5);
  await call(w,{type:'import',files:[new Blob(['[{broken'])]},'error');r=await call(w,{type:'query',query,view:'tracks',search:'',sort:'plays',page:0,id:2},'result');assert.equal(r.data.rows[0].name,'New song');
- const exported=await call(w,{type:'export',query},'export');assert.equal(exported.profile.selected_period.completion.mean,.5);
+ const exported=await call(w,{type:'export',query},'export');assert.equal(exported.profile.periods.selected.completion.mean,.5);const completionCol=exported.profile.events.columns.indexOf('completion_ratio_capped');assert.equal(exported.profile.events.rows[0][completionCol],.5);
  }finally{await w.terminate()}
 });
 test('progressive cache lookup sends unique IDs only and skips fetched metadata',async()=>{

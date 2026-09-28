@@ -2,11 +2,11 @@
 
 Prepared 5 September 2026. This is an unpublished review candidate. The existing live deployment has not been changed.
 
-## Important limitation
+## Authorization assumption for this branch
 
-The requested Spotify-powered listening analysis cannot responsibly be enabled under the currently published standard policy. Spotify Developer Policy III.13 restricts analysis of Spotify Content to derive listenership/user metrics or profiles; III.14 and Developer Terms IV.2 restrict AI ingestion. This affects derived completion as well as exporting raw responses. The server implementation therefore requires documented Spotify permission covering this use before it can run. Merely supplying credentials does not enable it. The ChatGPT export excludes Spotify-derived completion even when local enrichment is authorized. Independently sourced durations can drive both local analytics and export now; demo durations are clearly illustrative.
+The owner has confirmed that this deployment has separate Spotify permission allowing the derived listening analytics used by Listening Atlas, with copyright infringement remaining prohibited. The application therefore keeps the existing server-side `SPOTIFY_ANALYTICS_PERMISSION=granted` gate for Spotify enrichment, but no longer strips Spotify-derived duration/completion metrics from the user's own analysis export.
 
-Sources checked: [Developer Policy](https://developer.spotify.com/policy), [Developer Terms](https://developer.spotify.com/terms), [Get Track](https://developer.spotify.com/documentation/web-api/reference/get-track), [Client credentials](https://developer.spotify.com/documentation/web-api/tutorials/client-credentials-flow), [Rate limits](https://developer.spotify.com/documentation/web-api/concepts/rate-limits), [February 2026 migration](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide). These findings are implementation constraints, not legal advice or a claim of Spotify approval.
+The export remains deliberately metadata/analytics-only: it does not contain audio, lyrics, artwork, credentials, or raw Spotify API response objects. Duration provenance is retained so downstream analysis can distinguish Spotify-enriched, independently sourced, legacy source-unknown, and demo metadata.
 
 ## Changes and files
 
@@ -16,7 +16,7 @@ Sources checked: [Developer Policy](https://developer.spotify.com/policy), [Deve
 | `public/engine.js` | Existing normalization, identity and skip behavior; indexed duration lookup, simultaneous play counts, event-weighted completion, coverage and calendar memoization. |
 | `public/worker.js` | Existing worker/IndexedDB pipeline; progressive metadata updates, safe legacy migration, aggregate cache and demo preservation. |
 | `public/enrichment.js` | Unique-ID cache lookup, small progressive batches, cancellation and cooldown handling. |
-| `public/profile.js` | Compact deterministic schema v2, definitions, all time windows, previous-period metrics and interpretable momentum. |
+| `public/profile.js` | Analysis-grade schema v3 with period summaries, full entity catalogs, full momentum, time-series summaries, duration provenance, and normalized event-level facts. |
 | `server/api.js`, `spotify.js`, `cache.js`, `index.js` | Isolated server authentication, Spotify requests, persistent cache, globally serialized batches and explicit frontend asset serving. |
 | `db/schema.ts`, `drizzle/`, `.openai/hosting.json` | Additive Sites D1 cache and lease tables; no listening-history table. |
 | `scripts/build.mjs`, `package.json`, lockfile, `vite.config.js` | Worker-compatible build and internal preview of existing vanilla frontend. Authored frontend moved from `dist` to `public`; generated server output stays in `dist`. |
@@ -24,7 +24,7 @@ Sources checked: [Developer Policy](https://developer.spotify.com/policy), [Deve
 
 ## Storage and privacy
 
-Browser IndexedDB remains `listening-atlas`, version 1, with the same `data/history` value. The additional `duration_metadata_v2` key stores metadata separately, avoiding rewrites of 100,000 events during enrichment. Existing histories and legacy duration values remain readable; legacy source-unknown durations are excluded from AI completion. Imports keep their existing replace-and-deduplicate behavior. Demo does not overwrite saved history.
+Browser IndexedDB remains `listening-atlas`, version 1, with the same `data/history` value. The additional `duration_metadata_v2` key stores metadata separately, avoiding rewrites of 100,000 events during enrichment. Existing histories and legacy duration values remain readable. Valid legacy source-unknown durations may contribute to exported completion and are explicitly labeled `legacy_unknown` so downstream analysis can distinguish their provenance. Imports keep their existing replace-and-deduplicate behavior. Demo does not overwrite saved history.
 
 Sites D1 binding `DB` contains `spotify_track_metadata` (exact ID, duration, status, fetched/expiry/retry timestamps, attempts) and `spotify_enrichment_control` (global lease/cooldown). The generated migration only creates these new tables. No production migration has run because this candidate is not deployed. Successful and permanent-failure records expire after 30 days; expired records are ignored and lazily removed on API activity. This is bounded caching, not indefinite mirroring. Only unique track IDs cross from browser to enrichment server and Spotify; listening timestamps, played milliseconds and profiles do not.
 
@@ -44,7 +44,7 @@ Local metadata avoids repeated cache requests. Server lookup handles up to 80 un
 
 Each valid-duration event uses `min(ms_played / duration_ms, 1)`. Invalid/unknown/expired durations are excluded, never treated as zero. Zero-ms events with known duration legitimately count as zero completion. Raw listening time is never capped or filtered by the Count plays selector. Full listen is at least 90%, near-complete at least 75%, early exit below 25%. Means, exact medians and rates use underlying events, including for artists/albums. Coverage reports known events and associated raw listening time, plus identified/enriched/missing-ID tracks. Skip rate still uses explicit boolean skip flags, independently of completion.
 
-Schema version is 2. Every exported aggregate includes `plays.all_events`, `gte_30_seconds`, `gte_60_seconds`; the UI selection does not change analytical counts or rankings. Completion contains known-event count, coverage, mean, median, full/near/early rates and listening-time coverage. No eligible durations means null completion values. Selected/custom, previous equal-length period, 7/30/90/180-day and all-time windows are retained. Top lists are bounded (100 tracks, 30 artists, 30 albums), with current/previous momentum including entities that cool to zero. Definitions explicitly document identity, denominators, date boundaries and source restrictions. No raw durations, API objects, secrets or event-history dump are exported. Spotify-derived and unknown-source duration metrics are excluded from every AI-facing section.
+Schema version is 3. Every exported aggregate includes `plays.all_events`, `gte_30_seconds`, and `gte_60_seconds`; the UI selector does not change analytical counts or rankings. Completion contains known-event count, coverage, mean, median, full/near/early rates, and listening-time coverage. No eligible durations means null completion values. Selected/custom, previous equal-length period, 7/30/90/180-day, and all-time windows are retained. Period summaries keep bounded convenience rankings (100 tracks, 50 artists, 50 albums), while `entities` contains the complete all-time track/artist/album catalogs and `momentum` retains the complete selected-vs-previous change lists. The export also includes known `duration_ms` values with provenance and a compact chronological event ledger using documented columns and `track_ref` joins. Definitions explicitly document identity, denominators, date boundaries, and source handling. Credentials, raw Spotify API response objects, IP addresses, decrypted user-agent strings, audio, artwork, and lyrics remain excluded.
 
 ## Verification and remaining limits
 
