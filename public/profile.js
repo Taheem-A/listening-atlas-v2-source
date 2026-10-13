@@ -53,7 +53,7 @@ function durationInfo(x,metadata,now){
   const probe={uri:x.uri||'',name:x.name,artist:x.artist,album:x.album};
   const r=metadataFor(probe,metadata,now,false);
   if(!r)return {known:false,duration_ms:null,source:null};
-  return {known:true,duration_ms:r.duration_ms,source:r.source||'legacy_unknown',metadata_status:r.metadata_status||null,fetched_at_utc:Number.isFinite(r.fetched_at)?iso(r.fetched_at):null,expires_at_utc:Number.isFinite(r.expires_at)?iso(r.expires_at):null};
+  return {known:true,duration_ms:r.duration_ms,source:r.source||'legacy_unknown',metadata_status:r.metadata_status||null,fetched_at_utc:Number.isFinite(r.fetched_at)?iso(r.fetched_at):null,expires_at_utc:r.source==='spotify'||!Number.isFinite(r.expires_at)||r.expires_at===0?null:iso(r.expires_at)};
 }
 function fullEntities(all,current,previous,metadata,now){
   const cm=entityMaps(current),pm=previous?entityMaps(previous):{tracks:new Map(),artists:new Map(),albums:new Map()},trackRefByKey=new Map();
