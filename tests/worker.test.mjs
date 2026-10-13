@@ -2,7 +2,7 @@ import {test} from 'node:test';import assert from 'node:assert/strict';import {W
 import {Enrichment} from '../public/enrichment.js';
 const ID='72DnQlaqdNhz9QJZXfYe6L';
 const old={events:[{t:Date.UTC(2026,7,31),ms:60000,uri:'spotify:track:'+ID,name:'Existing song',artist:'Existing artist',album:'Existing album',skip:false}],durations:{['spotify:track:'+ID]:100000}};
-function wait(w,type){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{cleanup();reject(Error('Timeout: '+type))},10000);const listener=m=>{if(m.type===type){cleanup();resolve(m)}};function cleanup(){clearTimeout(timer);w.off('message',listener)}w.on('message',listener);w.once('error',reject)})}
+function wait(w,type){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{cleanup();reject(Error('Timeout: '+type))},10000);const listener=m=>{if(m.type===type){cleanup();resolve(m)}};const onError=e=>{cleanup();reject(e)};function cleanup(){clearTimeout(timer);w.off('message',listener);w.off('error',onError)}w.on('message',listener);w.on('error',onError)})}
 async function call(w,message,type){const p=wait(w,type);w.postMessage(message);return p;}
 const query={range:'all',threshold:0,timezone:'UTC'};
 test('B,V: old IndexedDB history and duration migration, safe demo switching, no destructive migration',async()=>{
