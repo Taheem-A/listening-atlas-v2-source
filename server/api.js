@@ -19,7 +19,7 @@ export async function enrich(ids,cache,client,{clock=Date.now,sleep=ms=>new Prom
     const current=new Map((await cache.get(ids)).map(r=>[r.spotify_track_id,r]));
     for(const id of ids){
       const old=current.get(id);
-      if(old&&old.expires_at>clock()&&(old.metadata_status==='ready'||['unavailable','identity_mismatch','invalid_metadata'].includes(old.metadata_status)||old.attempts>=3||old.retry_at>clock())){records.push(old);continue;}
+      if(old&&((old.metadata_status==='ready'&&Number.isSafeInteger(old.duration_ms)&&old.duration_ms>0)||(old.expires_at>clock()&&(['unavailable','identity_mismatch','invalid_metadata'].includes(old.metadata_status)||old.attempts>=3||old.retry_at>clock())))){records.push(old);continue;}
       let fetched;
       try{fetched=await client.track(id)}catch(error){
         const failure=error instanceof SpotifyFailure?error:new SpotifyFailure('temporary_error');
@@ -29,7 +29,7 @@ export async function enrich(ids,cache,client,{clock=Date.now,sleep=ms=>new Prom
         const row={spotify_track_id:id,duration_ms:null,metadata_status:'temporary_error',fetched_at:clock(),expires_at:clock()+CACHE_TTL,retry_at:clock()+Math.min(300000,15000*2**(attempts-1)),attempts};
         await cache.put(row);records.push(row);next=row.retry_at;break;
       }
-      const row={spotify_track_id:id,duration_ms:fetched.duration,metadata_status:fetched.status,fetched_at:clock(),expires_at:clock()+CACHE_TTL,retry_at:0,attempts:0};
+      const row={spotify_track_id:id,duration_ms:fetched.duration,metadata_status:fetched.status,fetched_at:clock(),expires_at:fetched.status==='ready'?0:clock()+CACHE_TTL,retry_at:0,attempts:0};
       await cache.put(row);records.push(row);next=clock()+1000;
       await sleep(1000);
     }
@@ -44,7 +44,7 @@ export async function handleAPI(request,env,dependencies={}) {
     const state=configuration(env);
     let stats={tracks:0,enriched:0,last_enrichment:null};
     if(env.DB){try{const c=new MetadataCache(env.DB);await c.prune(Date.now());stats=await c.stats();}catch{return json({state:'storage_unavailable',cache:stats});}}
-    return json({state,cache:stats,policy_url:'https://developer.spotify.com/policy',cache_ttl_days:30});
+    return json({state,cache:stats,policy_url:'https://developer.spotify.com/policy',successful_duration_retention:'indefinite',cache_ttl_days:null,non_ready_cache_ttl_days:30});
   }
   if(request.method!=='POST'||!['/api/spotify/lookup','/api/spotify/enrich'].includes(path))return json({state:'not_found'},404);
   if(request.headers.get('Origin')!==url.origin||request.headers.get('X-Atlas-Request')!=='metadata'||!request.headers.get('Content-Type')?.startsWith('application/json'))return json({state:'forbidden'},403);
