@@ -10,7 +10,8 @@ export function spotifyID(value) {
 export function metadataRecord(record, key, now=Date.now()) {
   if(typeof record==='number')record={duration_ms:record,source:'legacy_unknown'};
   if(!record||!Number.isSafeInteger(record.duration_ms)||record.duration_ms<=0||record.duration_ms>86400000)return null;
-  if(record.source==='spotify'&&(!Number.isFinite(record.expires_at)||record.expires_at<=now))return null;
+  // Valid Spotify durations are owner-authorized, non-expiring. Older cached records
+  // remain valid even if their legacy 30-day expires_at timestamp has passed.
   return {...record,spotify_track_id:spotifyID(key),duration_ms:record.duration_ms};
 }
 export function metadataFor(e,metadata,now=Date.now(),forExport=false) {
