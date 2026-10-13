@@ -1,6 +1,7 @@
 import {normalize,trackKey,aggregate,parseFile,spotifyID,periodRange,resetCalendarCache,metadataRecord} from './engine.js';
 import {buildProfile} from './profile.js';
 import {Enrichment} from './enrichment.js';
+import {prioritizedSpotifyIDs} from './priority.js';
 let events=[],durations={},demo=true,revision=0,importing=false;
 const resultsCache=new Map();
 function invalidate(){revision++;resultsCache.clear();}
@@ -23,7 +24,7 @@ async function saveImport(next,metadata) {
   });
 }
 function normalizeMetadata(input){const output={};for(const [key,value] of Object.entries(input||{})){const id=spotifyID(key);if(!id)continue;const record=metadataRecord(value,key);if(record)output[id]=record;}return output;}
-const ids=()=>[...new Set(events.map(e=>spotifyID(e.uri)).filter(Boolean))];
+const ids=()=>prioritizedSpotifyIDs(events);
 const send=message=>self.postMessage(message);
 const enrichment=new Enrichment({getMetadata:()=>durations,apply:async records=>{
   let changed=false;for(const row of records){if(!spotifyID(row.spotify_track_id))continue;const record={...row,source:'spotify'};
