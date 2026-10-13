@@ -1,3 +1,4 @@
+// Only unsuccessful/unavailable lookups expire. Successful durations are permanent.
 export const CACHE_TTL = 30 * 86400000;
 export function retryAfter(value, now=Date.now()) {
   const seconds = value !== null && value !== '' ? Number(value) : NaN;
