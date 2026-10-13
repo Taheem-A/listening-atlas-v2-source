@@ -87,7 +87,7 @@ test('Spotify upstream diagnostics are propagated without raw response content',
   if(url.endsWith('lookup'))return Response.json({state:'ready',records:[]});
   return Response.json({state:'temporary_error',retry_at:Date.now()+15000,records:[],upstream_stage:'token',upstream_status:503,upstream_reason:'network_error'});
  }});
- await manager.run([ID],{fetchMissing:true});const final=states.at(-1);assert.equal(final.state,'temporary_error');assert.equal(final.upstream_stage,'token');assert.equal(final.upstream_status,503);assert.equal(final.upstream_reason,'network_error');
+ await manager.run([ID],{fetchMissing:true});const final=states.at(-1);assert.equal(final.state,'temporary_error');assert.equal(final.upstream_stage,null);assert.equal(final.upstream_status,null);assert.equal(final.upstream_reason,null);assert.match(final.error_stage,/Spotify token/);assert.match(final.error_stage,/HTTP 503/);assert.match(final.error_stage,/network error/);
 });
 test('successful batches honor server retry_at before the next enrich request',async()=>{
  const ids=Array.from({length:4},(_,i)=>(i+20).toString(36).padStart(22,'0')),metadata={},times=[];
