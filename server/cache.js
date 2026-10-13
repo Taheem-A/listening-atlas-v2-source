@@ -13,7 +13,9 @@ export class MetadataCache {
   async put(row) {
     await this.db.prepare(`INSERT INTO spotify_track_metadata (spotify_track_id,duration_ms,metadata_status,fetched_at,expires_at,retry_at,attempts) VALUES (?,?,?,?,?,?,?) ON CONFLICT(spotify_track_id) DO UPDATE SET duration_ms=excluded.duration_ms,metadata_status=excluded.metadata_status,fetched_at=excluded.fetched_at,expires_at=excluded.expires_at,retry_at=excluded.retry_at,attempts=excluded.attempts`).bind(row.spotify_track_id,row.duration_ms,row.metadata_status,row.fetched_at,row.expires_at,row.retry_at,row.attempts).run();
   }
-  async prune(now) { await this.db.prepare('DELETE FROM spotify_track_metadata WHERE expires_at <= ?').bind(now).run(); }
+  async prune(now) { // Successful durations are retained until the owner explicitly clears the cache.
+    await this.db.prepare("DELETE FROM spotify_track_metadata WHERE metadata_status <> 'ready' AND expires_at > 0 AND expires_at <= ?").bind(now).run();
+  }
   async stats() { return await this.db.prepare("SELECT COUNT(*) AS tracks, SUM(CASE WHEN metadata_status='ready' THEN 1 ELSE 0 END) AS enriched, MAX(fetched_at) AS last_enrichment FROM spotify_track_metadata").first(); }
   async control() { return await this.db.prepare("SELECT * FROM spotify_enrichment_control WHERE key='spotify'").first(); }
   async claim(now, token) {

@@ -44,9 +44,9 @@ test('Q,R,S,T,U: deterministic analysis schema v3, all counts, source-aware comp
  const text=JSON.stringify(p);assert.deepEqual(JSON.parse(text),p);assert.equal(text.includes('duration_ms'),true);assert.equal(text.includes('SPOTIFY_CLIENT_SECRET'),false);assert.equal(text.includes('raw_spotify_api_responses'),true);assert.deepEqual(buildProfile(events,m,q,false,1),p);
  const another=buildProfile(events,m,{...q,threshold:60000},false,1);assert.deepEqual(another.periods.selected,p.periods.selected);assert.deepEqual(another.periods.last_180_days,p.periods.last_180_days);
 });
-test('Spotify and legacy-unknown metadata feed authorized analysis export; expired Spotify cache is excluded',()=>{
+test('Spotify and legacy-unknown metadata feed authorized analysis export; legacy Spotify expiry does not remove valid durations',()=>{
  for(const source of ['spotify','legacy_unknown']){const m={[ID]:{duration_ms:100000,source,expires_at:Date.now()+10000}};assert.equal(buildProfile([event(50000)],m,q).periods.selected.completion.mean,.5);}
- assert.equal(aggregate([event(50000)],0,Infinity,0,'UTC',{[ID]:{duration_ms:100000,source:'spotify',expires_at:1}}).completion.mean,null);
+ assert.equal(aggregate([event(50000)],0,Infinity,0,'UTC',{[ID]:{duration_ms:100000,source:'spotify',expires_at:1}}).completion.mean,.5);
 });
 test('export includes cooling-to-zero tracks and artist momentum',()=>{
  const now=Date.UTC(2026,7,31);const events=[event(60000,now),event(60000,now-86400000*40,'spotify:track:'+OTHER)];const p=buildProfile(events,meta,q);const cooled=p.momentum.tracks.find(x=>x.track_uri.endsWith(OTHER));assert.equal(cooled.change.gte_30_seconds,-1);assert.ok(p.momentum.artists.length);

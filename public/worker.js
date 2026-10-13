@@ -1,13 +1,30 @@
 import {normalize,trackKey,aggregate,parseFile,spotifyID,periodRange,resetCalendarCache,metadataRecord} from './engine.js';
 import {buildProfile} from './profile.js';
 import {Enrichment} from './enrichment.js';
+import {prioritizedSpotifyIDs} from './priority.js';
 let events=[],durations={},demo=true,revision=0,importing=false;
 const resultsCache=new Map();
 function invalidate(){revision++;resultsCache.clear();}
 const db=()=>new Promise((resolve,reject)=>{const r=indexedDB.open('listening-atlas',1);r.onupgradeneeded=()=>r.result.createObjectStore('data');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
 async function saved(mode,value,key='history'){const d=await db();return new Promise((resolve,reject)=>{const tx=d.transaction('data',mode==='get'?'readonly':'readwrite'),s=tx.objectStore('data');let r;if(mode==='get')r=s.get(key);else if(mode==='clear')r=s.delete(key);else r=s.put(value,key);tx.oncomplete=()=>{d.close();resolve(r.result)};tx.onerror=()=>{d.close();reject(tx.error)};});}
+// Commit history and durations together: a failed/quota-exceeded transaction leaves old data intact.
+async function saveImport(next,metadata) {
+  const d=await db();
+  return new Promise((resolve,reject)=>{
+    let tx;
+    try {
+      tx=d.transaction('data','readwrite');
+      const store=tx.objectStore('data');
+      store.put({events:next},'history');
+      store.put(metadata,'duration_metadata_v2');
+    } catch(error) {d.close();reject(error);return;}
+    tx.oncomplete=()=>{d.close();resolve();};
+    tx.onabort=()=>{d.close();reject(tx.error||Error('Import storage transaction aborted.'));};
+    tx.onerror=()=>{}; // Abort handler owns the rejection.
+  });
+}
 function normalizeMetadata(input){const output={};for(const [key,value] of Object.entries(input||{})){const id=spotifyID(key);if(!id)continue;const record=metadataRecord(value,key);if(record)output[id]=record;}return output;}
-const ids=()=>[...new Set(events.map(e=>spotifyID(e.uri)).filter(Boolean))];
+const ids=()=>prioritizedSpotifyIDs(events);
 const send=message=>self.postMessage(message);
 const enrichment=new Enrichment({getMetadata:()=>durations,apply:async records=>{
   let changed=false;for(const row of records){if(!spotifyID(row.spotify_track_id))continue;const record={...row,source:'spotify'};
@@ -39,16 +56,44 @@ self.onmessage=async({data:m})=>{
     }else if(m.type==='clear'){
       enrichment.cancel();await saved('clear');makeDemo();demoMetadata();resetCalendarCache();ready('Saved history removed. Showing demo data.');send({type:'enrichment',state:'demo'});
     }else if(m.type==='import'){
-      if(importing)throw Error('An import is already in progress.');importing=true;enrichment.cancel();
+      if(importing)throw Error('An import is already in progress.');
+      importing=true;enrichment.cancel();
       try{
-        const next=[],seen=new Set();let invalid=0,duplicates=0,last=0;
-        for(const file of m.files){await parseFile(file,r=>{const e=normalize(r);if(!e){invalid++;return;}const key=JSON.stringify(e);if(seen.has(key)){duplicates++;return;}seen.add(key);next.push(e)},p=>{if(Date.now()-last>150){send({type:'progress',text:`Reading ${file.name} · ${Math.round(p*100)}% · ${next.length.toLocaleString()} music events`});last=Date.now();}});}
-        if(!next.length)throw Error('No valid music events found. Choose Extended Streaming History JSON files containing ts, ms_played and master_metadata_track_name.');
-        let storedMetadata={};try{storedMetadata=await saved('get',null,'duration_metadata_v2')}catch{}
-        const keep=demo?{}:durations;
-        events=next;demo=false;durations={...normalizeMetadata(storedMetadata),...keep};resetCalendarCache();
-        let note=`Imported ${next.length.toLocaleString()} music events. ${duplicates.toLocaleString()} exact duplicates removed; ${invalid.toLocaleString()} non-music or invalid entries excluded.`;
-        try{await saved('put',{events});await saved('put',durations,'duration_metadata_v2')}catch{note+=' Browser storage is unavailable or full. Keep your original files; this session remains usable.';}
+        // Demo is temporary; merge against the real saved history if one exists.
+        const storedHistory=demo?await saved('get'):null;
+        const existing=demo?(storedHistory?.events||[]):events;
+        const next=[],seen=new Set();let invalid=0,duplicates=0,oldDuplicates=0,valid=0,added=0,last=0;
+        for(const e of existing){
+          const key=JSON.stringify(e);
+          if(seen.has(key)){oldDuplicates++;continue;}
+          seen.add(key);next.push(e);
+        }
+        for(const file of m.files){
+          await parseFile(file,r=>{
+            const e=normalize(r);
+            if(!e){invalid++;return;}
+            valid++;
+            const key=JSON.stringify(e);
+            if(seen.has(key)){duplicates++;return;}
+            seen.add(key);next.push(e);added++;
+          },p=>{
+            if(Date.now()-last>150){
+              send({type:'progress',text:`Reading ${file.name||'history'} · ${Math.round(p*100)}% · ${added.toLocaleString()} new music events`});
+              last=Date.now();
+            }
+          });
+        }
+        if(!valid)throw Error('No valid music events found. Choose Extended Streaming History JSON files containing ts, ms_played and master_metadata_track_name.');
+        next.sort((a,b)=>a.t-b.t);
+        let storedMetadata={};
+        try{storedMetadata=await saved('get',null,'duration_metadata_v2')}catch{}
+        const keep=demo?normalizeMetadata(storedHistory?.durations):durations;
+        const nextDurations={...normalizeMetadata(storedMetadata),...keep};
+        // Never advertise a successful import until the full dataset is durably committed.
+        try{await saveImport(next,nextDurations)}
+        catch{throw Error('Could not save the imported history (browser storage may be full or blocked). Your previous saved history is unchanged. Keep your Spotify export as a backup.');}
+        events=next;demo=false;durations=nextDurations;resetCalendarCache();
+        const note=`History saved: ${next.length.toLocaleString()} music events (${added.toLocaleString()} new, ${duplicates.toLocaleString()} already imported, ${invalid.toLocaleString()} invalid/non-music${oldDuplicates?', '+oldDuplicates.toLocaleString()+' previous duplicates removed':''}).`;
         ready(note);enrichment.run(ids(),{fetchMissing:true});
       }finally{importing=false;}
     }else if(m.type==='metadata'){

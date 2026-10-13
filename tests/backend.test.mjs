@@ -47,8 +47,27 @@ test('missing credentials and policy permission produce usable non-error states'
 test('single D1 lease serializes concurrent requests and expired lease recovers',async()=>{
  const db=testDB(),cache=new MetadataCache(db);assert.equal(await cache.claim(0,'one'),true);assert.equal(await cache.claim(1,'two'),false);assert.equal(await cache.claim(180001,'two'),true);await cache.release('one',999999);assert.equal((await cache.control()).lock_token,'two');db.close();
 });
-test('cache expiration purges duration records without unrelated tables',async()=>{
- const db=testDB(),cache=new MetadataCache(db);await cache.put({spotify_track_id:ID,duration_ms:200000,metadata_status:'ready',fetched_at:0,expires_at:1000,retry_at:0,attempts:0});await cache.prune(1001);assert.equal((await cache.get([ID])).length,0);db.close();
+test('successful durations remain after legacy TTL while unsuccessful results expire',async()=>{
+ const db=testDB(),cache=new MetadataCache(db);
+ // An older ready entry has a past legacy expiry. It must survive without refetching.
+ await cache.put({spotify_track_id:ID,duration_ms:200000,metadata_status:'ready',fetched_at:0,expires_at:1000,retry_at:0,attempts:0});
+ await cache.put({spotify_track_id:OTHER,duration_ms:null,metadata_status:'unavailable',fetched_at:0,expires_at:1000,retry_at:0,attempts:0});
+ await cache.prune(1001);
+ assert.deepEqual((await cache.get([ID,OTHER])).map(x=>x.spotify_track_id),[ID]);
+ let calls=0;await enrich([ID],new MetadataCache(db),{track:async()=>{calls++;return{status:'ready',duration:210000}}},{clock:()=>50000000,sleep:async()=>{}});
+ assert.equal(calls,0);
+ assert.equal((await cache.get([ID]))[0].duration_ms,200000);
+ await enrich([OTHER],new MetadataCache(db),{track:async()=>{calls++;return{status:'ready',duration:210000}}},{clock:()=>50000000,sleep:async()=>{}});
+ assert.equal(calls,1);
+ assert.equal((await cache.get([OTHER]))[0].expires_at,0);
+ db.close();
+});
+test('status advertises indefinite successful retention and bounded failure retry',async()=>{
+ const r=await handleAPI(new Request('https://atlas.test/api/spotify/status',{headers:{'oai-authenticated-user-id':'u'}}),env);
+ const data=await r.json();
+ assert.equal(data.successful_duration_retention,'indefinite');
+ assert.equal(data.cache_ttl_days,null);
+ assert.equal(data.non_ready_cache_ttl_days,30);
 });
 test('large lookup requests are accepted and cache queries remain capped at 80 IDs',async()=>{
  const ids=Array.from({length:1000},(_,i)=>i.toString(36).padStart(22,'0')),batches=[];
@@ -57,4 +76,25 @@ test('large lookup requests are accepted and cache queries remain capped at 80 I
  let received=0;const cache={prune:async()=>{},get:async values=>{received=values.length;return[]}};
  let r=await handleAPI(request('lookup',{ids}),{...env,DB:{}},{cache});assert.equal(r.status,200);assert.equal(received,1000);
  r=await handleAPI(request('lookup',{ids:[...ids,'zzzzzzzzzzzzzzzzzzzzzz']}),{...env,DB:{}},{cache});assert.equal(r.status,400);
+});
+
+test('Spotify failures preserve sanitized upstream stage/status without response bodies or secrets',async()=>{
+ const token500=new SpotifyClient(env,{fetcher:async()=>new Response('do not expose me',{status:500})});
+ await assert.rejects(()=>token500.track(ID),e=>e instanceof SpotifyFailure&&e.status==='temporary_error'&&e.stage==='token'&&e.httpStatus===500);
+ const track500=new SpotifyClient(env,{fetcher:async url=>url.includes('/api/token')?token():new Response('private upstream body',{status:502})});
+ await assert.rejects(()=>track500.track(ID),e=>e instanceof SpotifyFailure&&e.status==='temporary_error'&&e.stage==='track'&&e.httpStatus===502);
+ const network=new SpotifyClient(env,{fetcher:async()=>{throw Error('TEST_SECRET should never escape')}});
+ await assert.rejects(()=>network.track(ID),e=>e instanceof SpotifyFailure&&e.status==='temporary_error'&&e.stage==='token'&&e.reason==='network_error'&&!e.message.includes('TEST_SECRET'));
+});
+test('enrichment returns safe Spotify failure diagnostics and keeps transient backoff',async()=>{
+ const db=testDB(),cache=new MetadataCache(db),failure=new SpotifyFailure('temporary_error',0,{stage:'token',httpStatus:503,reason:'network_error'});
+ const r=await enrich([ID],cache,{track:async()=>{throw failure}},{clock:()=>1000,sleep:async()=>{}});
+ assert.equal(r.state,'temporary_error');assert.equal(r.upstream_stage,'token');assert.equal(r.upstream_status,503);assert.equal(r.upstream_reason,'network_error');assert.equal(r.records[0].attempts,1);assert.ok(r.retry_at>1000);db.close();
+});
+test('hosted enrich requests stay short by accepting at most three track IDs',async()=>{
+ const three=[ID,OTHER,'22dFghVXANMlKmJXsNCbNl'];
+ let received=0;const cache={prune:async()=>{},claim:async()=>true,control:async()=>null,get:async()=>[],put:async()=>{},release:async()=>{}};
+ const client={track:async()=>{received++;return{status:'ready',duration:123000}}};
+ let r=await handleAPI(request('enrich',{ids:three}),{...env,DB:{}},{cache,client,clock:()=>0,sleep:async()=>{}});assert.equal(r.status,200);assert.equal(received,3);
+ r=await handleAPI(request('enrich',{ids:[...three,'33dFghVXANMlKmJXsNCbNl']}),{...env,DB:{}},{cache,client,clock:()=>0,sleep:async()=>{}});assert.equal(r.status,400);
 });

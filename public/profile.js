@@ -9,7 +9,7 @@ export const definitions={
   completion:'For each event with a valid known duration: completion_ratio_capped = min(ms_played / duration_ms, 1). Aggregate mean, exact median and rates use underlying events. Raw ratios are retained at event level so over-duration events are visible rather than hidden.',
   completion_thresholds:'full_listen is capped completion >= 0.90; near_complete is >= 0.75 and includes full listens; early_exit is < 0.25.',
   completion_coverage:'known_events / all_events. known_listening_time_coverage is raw listening time on events with known duration / all raw listening time.',
-  metadata_source:'Duration metadata may come from Spotify enrichment, independently supplied files, legacy source-unknown data, or demo data. Source is retained on exported track/event records. No audio, artwork, lyrics, credentials or Spotify API response objects are exported.',
+  metadata_source:'Successfully enriched Spotify durations are retained without automatic expiration. Duration metadata may come from Spotify enrichment, independently supplied files, legacy source-unknown data, or demo data. Source is retained on exported track/event records. No audio, artwork, lyrics, credentials or Spotify API response objects are exported.',
   periods:'7/30/90/180-day trailing windows end at the latest imported playback end timestamp, inclusive. All-time spans first through last imported music event. Custom start/end preserve the existing UTC-boundary behavior. Display timezone affects calendar grouping only.',
   comparison:'Preceding period has exactly the same millisecond length and ends 1 ms before the selected period begins. Lifetime has no prior-period comparison.',
   identity:'Tracks retain exact imported Spotify URI when present. Distinct Spotify IDs are never merged by title. Without a URI, title/artist/album fallback identity is retained for history only. Artists use imported album-artist name; albums use artist + album name.',
@@ -53,7 +53,7 @@ function durationInfo(x,metadata,now){
   const probe={uri:x.uri||'',name:x.name,artist:x.artist,album:x.album};
   const r=metadataFor(probe,metadata,now,false);
   if(!r)return {known:false,duration_ms:null,source:null};
-  return {known:true,duration_ms:r.duration_ms,source:r.source||'legacy_unknown',metadata_status:r.metadata_status||null,fetched_at_utc:Number.isFinite(r.fetched_at)?iso(r.fetched_at):null,expires_at_utc:Number.isFinite(r.expires_at)?iso(r.expires_at):null};
+  return {known:true,duration_ms:r.duration_ms,source:r.source||'legacy_unknown',metadata_status:r.metadata_status||null,fetched_at_utc:Number.isFinite(r.fetched_at)?iso(r.fetched_at):null,expires_at_utc:r.source==='spotify'||!Number.isFinite(r.expires_at)||r.expires_at===0?null:iso(r.expires_at)};
 }
 function fullEntities(all,current,previous,metadata,now){
   const cm=entityMaps(current),pm=previous?entityMaps(previous):{tracks:new Map(),artists:new Map(),albums:new Map()},trackRefByKey=new Map();
