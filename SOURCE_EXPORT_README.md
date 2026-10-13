@@ -50,6 +50,18 @@ npm run build
 
 The build generates `dist/server/index.js`, copies `.openai/hosting.json`, and includes the Drizzle migrations under `dist/.openai/drizzle/`.
 
+## History and enrichment persistence (October 2026)
+
+- **Full and incremental history imports merge**, including when a user is temporarily browsing demo data. Existing normalized events are retained, exact normalized duplicates are removed, and results are sorted by playback end time. Reimporting the same full export is idempotent.
+- History and local duration metadata are saved **together in a single IndexedDB transaction**. Parsing or storage failure does not replace the previously saved dataset. The data dialog also lets users request persistent browser storage via the StorageManager API; browsers may decline. Browser clearing, profile deletion, device loss, or storage failure are still possible, so **keep original Spotify export files**.
+- Spotify duration records with `metadata_status='ready'` and a valid duration are **never pruned or automatically refreshed**. Existing ready rows with legacy `expires_at` timestamps continue to work without a schema migration. New ready rows store `expires_at=0`. Valid cached durations in the browser remain usable even after old expiry dates.
+- Unavailable tracks, mismatches, invalid metadata and exhausted temporary failures retain the **30-day recheck/expiry policy**, preventing permanent caching of failures.
+- **No cross-device listening-history sync** is implemented. Listening events remain only in browser IndexedDB; D1 contains only track-ID-associated metadata. The site must continue to use the owner's separately authorized Spotify enrichment permission.
+
+### Updating the live site
+
+These changes are source-level until deployed through the existing ChatGPT Sites project identified below. Merging the GitHub PR does not by itself verify or update the live Site. Back up Spotify exports before deploying, then verify an import, reload, and the metadata coverage display in the same browser. No database-schema migration is needed for this retention change.
+
 ## Sites and D1 deployment configuration
 
 `.openai/hosting.json` identifies the existing Listening Atlas Site and declares the logical D1 binding:
