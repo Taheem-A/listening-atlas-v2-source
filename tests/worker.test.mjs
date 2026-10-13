@@ -13,13 +13,44 @@ test('B,V: old IndexedDB history and duration migration, safe demo switching, no
  await call(w,{type:'init'},'ready');r=await call(w,{type:'query',query,view:'tracks',search:'',sort:'plays',page:0,id:3},'result');assert.equal(r.data.rows[0].name,'Existing song');
  }finally{await w.terminate()}
 });
-test('A,B: import replacement keeps duration cache, removes exact duplicate events, fails atomically',async()=>{
- const w=new Worker(new URL('./worker-harness.mjs',import.meta.url),{workerData:{seed:old}});try{await wait(w,'harness_ready');await call(w,{type:'init'},'ready');
- const metadata=new Blob([JSON.stringify([{spotify_track_uri:'spotify:track:'+ID,duration_ms:200000}])]);await call(w,{type:'metadata',file:metadata,independent:true},'metadata_updated');
- const raw={ts:'2026-08-31T00:00:00Z',ms_played:100000,spotify_track_uri:'spotify:track:'+ID,master_metadata_track_name:'New song',master_metadata_album_artist_name:'Artist',master_metadata_album_album_name:'Album',skipped:false};
- await call(w,{type:'import',files:[new Blob([JSON.stringify([raw,raw])])]},'ready');let r=await call(w,{type:'query',query,view:'tracks',search:'',sort:'plays',page:0,id:1},'result');assert.equal(r.data.total,1);assert.equal(r.data.rows[0].completion.mean,.5);
- await call(w,{type:'import',files:[new Blob(['[{broken'])]},'error');r=await call(w,{type:'query',query,view:'tracks',search:'',sort:'plays',page:0,id:2},'result');assert.equal(r.data.rows[0].name,'New song');
- const exported=await call(w,{type:'export',query},'export');assert.equal(exported.profile.periods.selected.completion.mean,.5);const completionCol=exported.profile.events.columns.indexOf('completion_ratio_capped');assert.equal(exported.profile.events.rows[0][completionCol],.5);
+test('A,B: full and partial imports merge, deduplicate, and preserve duration metadata',async()=>{
+ const w=new Worker(new URL('./worker-harness.mjs',import.meta.url),{workerData:{seed:old}});
+ try{
+  await wait(w,'harness_ready');await call(w,{type:'init'},'ready');
+  const metadata=new Blob([JSON.stringify([{spotify_track_uri:'spotify:track:'+ID,duration_ms:200000}])]);
+  await call(w,{type:'metadata',file:metadata,independent:true},'metadata_updated');
+  const raw={ts:'2026-09-01T00:00:00Z',ms_played:100000,spotify_track_uri:'spotify:track:'+ID,master_metadata_track_name:'Existing song',master_metadata_album_artist_name:'Existing artist',master_metadata_album_album_name:'Existing album',skipped:false};
+  const incoming=new Blob([JSON.stringify([raw,raw])]);
+  let notice=await call(w,{type:'import',files:[incoming]},'ready');
+  assert.match(notice.note,/1 new/);
+  let r=await call(w,{type:'query',query,view:'tracks',search:'',sort:'plays',page:0,id:1},'result');
+  assert.equal(r.data.total,2);assert.equal(r.data.rows[0].completion.mean,.4);
+  // A complete history export can be imported again without double counting.
+  notice=await call(w,{type:'import',files:[incoming]},'ready');assert.match(notice.note,/0 new/);
+  r=await call(w,{type:'query',query,view:'tracks',search:'',sort:'plays',page:0,id:2},'result');assert.equal(r.data.total,2);
+  const persisted=await call(w,{type:'read_saved'},'saved');assert.equal(persisted.data.events.length,2);
+  assert.equal(persisted.data.events[0].name,'Existing song');
+  // A damaged follow-up does not overwrite the previously saved history.
+  await call(w,{type:'import',files:[new Blob(['[{broken'])]},'error');
+  const stillSaved=await call(w,{type:'read_saved'},'saved');assert.deepEqual(stillSaved.data,persisted.data);
+  const exported=await call(w,{type:'export',query},'export');
+  assert.equal(exported.profile.periods.selected.completion.mean,.4);
+  const completionCol=exported.profile.events.columns.indexOf('completion_ratio_capped');
+  assert.deepEqual(exported.profile.events.rows.map(row=>row[completionCol]).sort(),[.3,.5]);
+ }finally{await w.terminate()}
+});
+test('import while exploring demo merges against saved real history, not demo rows',async()=>{
+ const w=new Worker(new URL('./worker-harness.mjs',import.meta.url),{workerData:{seed:old}});
+ try{
+  await wait(w,'harness_ready');await call(w,{type:'init'},'ready');await call(w,{type:'demo'},'ready');
+  const raw={ts:'2026-09-02T00:00:00Z',ms_played:90000,spotify_track_uri:'spotify:track:11dFghVXANMlKmJXsNCbNl',master_metadata_track_name:'Second track',master_metadata_album_artist_name:'Second artist',master_metadata_album_album_name:'Second album'};
+  await call(w,{type:'import',files:[new Blob([JSON.stringify([raw])])]},'ready');
+  const r=await call(w,{type:'query',query,view:'tracks',search:'',sort:'plays',page:0,id:1},'result');
+  assert.equal(r.data.total,2);assert.equal(r.data.demo,false);
+  const persisted=await call(w,{type:'read_saved'},'saved');
+  assert.equal(persisted.data.events.length,2);
+  assert.ok(persisted.data.events.some(x=>x.name==='Existing song'));
+  assert.ok(persisted.data.events.some(x=>x.name==='Second track'));
  }finally{await w.terminate()}
 });
 test('progressive cache lookup sends unique IDs only and skips fetched metadata',async()=>{
